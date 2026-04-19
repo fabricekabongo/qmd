@@ -13,6 +13,8 @@ import {
   getDefaultLlamaCpp,
   disposeDefaultLlamaCpp,
   resolveLlamaGpuMode,
+  formatQueryForEmbedding,
+  formatDocForEmbedding,
   withLLMSession,
   canUnloadLLM,
   SessionReleasedError,
@@ -53,6 +55,21 @@ describe("LlamaCpp.modelExists", () => {
 
     expect(result.exists).toBe(false);
     expect(result.name).toBe("/nonexistent/path/model.gguf");
+  });
+
+  test("returns exists:true for OpenAI embedding model URIs", async () => {
+    const llm = getDefaultLlamaCpp();
+    const result = await llm.modelExists("openai:text-embedding-3-small");
+
+    expect(result.exists).toBe(true);
+    expect(result.name).toBe("openai:text-embedding-3-small");
+  });
+});
+
+describe("Embedding text formatting", () => {
+  test("uses raw formatting for OpenAI embedding models", () => {
+    expect(formatQueryForEmbedding("hello world", "openai:text-embedding-3-small")).toBe("hello world");
+    expect(formatDocForEmbedding("doc body", "doc title", "openai:text-embedding-3-small")).toBe("doc title\ndoc body");
   });
 });
 
@@ -217,6 +234,36 @@ describe("LlamaCpp embedding truncation", () => {
       embedding: [0.25, 0.5],
       model: llm.embedModelUri,
     });
+  });
+
+  test("can embed through OpenAI-compatible API", async () => {
+    const llm = new LlamaCpp({ embedModel: "openai:text-embedding-3-small" });
+    const prevKey = process.env.QMD_OPENAI_API_KEY;
+    process.env.QMD_OPENAI_API_KEY = "test-key";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch" as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+      }),
+    } as Response);
+
+    try {
+      const result = await llm.embed("hello");
+      expect(result).toEqual({
+        embedding: [0.1, 0.2, 0.3],
+        model: "openai:text-embedding-3-small",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe("https://api.openai.com/v1/embeddings");
+      expect((init as RequestInit).method).toBe("POST");
+    } finally {
+      fetchMock.mockRestore();
+      if (prevKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevKey;
+      await llm.dispose();
+    }
   });
 });
 

@@ -507,9 +507,27 @@ export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q
 qmd embed -f
 ```
 
+### OpenAI / Remote Embeddings
+
+You can also use a remote OpenAI-compatible embeddings API instead of a local GGUF embedding model:
+
+```sh
+export QMD_EMBED_MODEL="openai:text-embedding-3-small"
+export QMD_OPENAI_API_KEY="sk-..."              # or OPENAI_API_KEY
+# Optional for compatible providers/proxies:
+export QMD_OPENAI_BASE_URL="https://api.openai.com/v1"
+
+qmd embed -f
+```
+
+When `QMD_EMBED_MODEL` starts with `openai:`, QMD sends embedding requests to
+`$QMD_OPENAI_BASE_URL/embeddings` and keeps reranking/query-expansion local unless
+you configure those models separately.
+
 Supported model families:
 - **embeddinggemma** (default) — English-optimized, small footprint
 - **Qwen3-Embedding** — Multilingual (119 languages including CJK), MTEB top-ranked
+- **OpenAI-compatible** (`openai:<model-name>`) — remote API embeddings
 
 > **Note:** When switching embedding models, you must re-index with `qmd embed -f`
 > since vectors are not cross-compatible between models. The prompt format is

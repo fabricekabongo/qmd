@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changes
+
+- Embedding: add OpenAI-compatible remote embeddings support. Set
+  `QMD_EMBED_MODEL=openai:<model-name>` to send vectors requests to
+  `$QMD_OPENAI_BASE_URL/embeddings` (default `https://api.openai.com/v1`)
+  using `QMD_OPENAI_API_KEY`/`OPENAI_API_KEY`.
+
 ### Fixes
 
 - GPU: respect explicit `QMD_LLAMA_GPU=metal|vulkan|cuda` backend overrides instead of always using auto GPU selection. #529

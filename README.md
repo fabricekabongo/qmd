@@ -507,22 +507,37 @@ export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q
 qmd embed -f
 ```
 
-### OpenAI / Remote Embeddings
+### OpenAI / Remote Models (Embeddings, Generation, Reranking)
 
 You can also use a remote OpenAI-compatible embeddings API instead of a local GGUF embedding model:
 
 ```sh
 export QMD_EMBED_MODEL="openai:text-embedding-3-small"
+export QMD_GENERATE_MODEL="openai:gpt-5.4-mini"
+export QMD_RERANK_MODEL="openai:gpt-5.4-mini"
 export QMD_OPENAI_API_KEY="sk-..."              # or OPENAI_API_KEY
-# Optional for compatible providers/proxies:
+# Optional global base URL:
 export QMD_OPENAI_BASE_URL="https://api.openai.com/v1"
+# Optional per-operation base URLs:
+export QMD_OPENAI_EMBED_BASE_URL="https://api.openai.com/v1"
+export QMD_OPENAI_GENERATE_BASE_URL="https://api.openai.com/v1"
+export QMD_OPENAI_RERANK_BASE_URL="https://api.openai.com/v1"
 
 qmd embed -f
 ```
 
-When `QMD_EMBED_MODEL` starts with `openai:`, QMD sends embedding requests to
-`$QMD_OPENAI_BASE_URL/embeddings` and keeps reranking/query-expansion local unless
-you configure those models separately.
+If model env vars are not set, QMD auto-selects OpenAI models whenever
+`QMD_OPENAI_API_KEY` (or `OPENAI_API_KEY`) is present:
+- Embeddings default: `openai:text-embedding-3-small` (override: `QMD_OPENAI_EMBED_MODEL`)
+- Generation default: `openai:gpt-5.4-mini` (override: `QMD_OPENAI_GENERATE_MODEL`)
+- Rerank default: `openai:gpt-5.4-mini` (override: `QMD_OPENAI_RERANK_MODEL`)
+
+This applies consistently across `status`, `embed`, `search`, `vsearch`, and `query`.
+
+When a model starts with `openai:`, QMD performs real HTTP API calls (no local GGUF fallback):
+- Embeddings -> `POST /embeddings`
+- Generation/query expansion -> `POST /chat/completions`
+- Reranking -> `POST /chat/completions`
 
 Supported model families:
 - **embeddinggemma** (default) — English-optimized, small footprint

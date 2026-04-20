@@ -33,6 +33,9 @@ export function isQwen3EmbeddingModel(modelUri: string): boolean {
 export function isOpenAIEmbeddingModel(modelUri: string): boolean {
   return modelUri.toLowerCase().startsWith("openai:");
 }
+function isOpenAIModel(modelUri: string): boolean {
+  return modelUri.toLowerCase().startsWith("openai:");
+}
 
 /**
  * Format a query for embedding.
@@ -223,6 +226,71 @@ const MODEL_CACHE_DIR = process.env.XDG_CACHE_HOME
   ? join(process.env.XDG_CACHE_HOME, "qmd", "models")
   : join(homedir(), ".cache", "qmd", "models");
 export const DEFAULT_MODEL_CACHE_DIR = MODEL_CACHE_DIR;
+const DEFAULT_OPENAI_EMBED_MODEL_NAME = "text-embedding-3-small";
+const DEFAULT_OPENAI_GENERATE_MODEL_NAME = "gpt-5.4-mini";
+const DEFAULT_OPENAI_RERANK_MODEL_NAME = "gpt-5.4-mini";
+
+function hasOpenAIApiKey(): boolean {
+  return !!(process.env.QMD_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY);
+}
+
+function normalizeOpenAIModel(model: string, fallback: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) return `openai:${fallback}`;
+  return isOpenAIModel(trimmed) ? trimmed : `openai:${trimmed}`;
+}
+
+function normalizeOpenAIEmbedModel(model: string): string {
+  return normalizeOpenAIModel(model, DEFAULT_OPENAI_EMBED_MODEL_NAME);
+}
+
+export function resolveEmbedModelUri(configuredModel?: string): string {
+  if (configuredModel?.trim()) return configuredModel.trim();
+
+  const envModel = process.env.QMD_EMBED_MODEL?.trim();
+  if (envModel) return envModel;
+
+  if (hasOpenAIApiKey()) {
+    const openAIModel =
+      process.env.QMD_OPENAI_EMBED_MODEL ??
+      process.env.OPENAI_EMBEDDING_MODEL ??
+      DEFAULT_OPENAI_EMBED_MODEL_NAME;
+    return normalizeOpenAIEmbedModel(openAIModel);
+  }
+
+  return DEFAULT_EMBED_MODEL;
+}
+
+export function resolveGenerateModelUri(configuredModel?: string): string {
+  if (configuredModel?.trim()) return configuredModel.trim();
+
+  const envModel = process.env.QMD_GENERATE_MODEL?.trim();
+  if (envModel) return envModel;
+
+  if (hasOpenAIApiKey()) {
+    const openAIModel =
+      process.env.QMD_OPENAI_GENERATE_MODEL ??
+      process.env.OPENAI_MODEL ??
+      DEFAULT_OPENAI_GENERATE_MODEL_NAME;
+    return normalizeOpenAIModel(openAIModel, DEFAULT_OPENAI_GENERATE_MODEL_NAME);
+  }
+
+  return DEFAULT_GENERATE_MODEL;
+}
+
+export function resolveRerankModelUri(configuredModel?: string): string {
+  if (configuredModel?.trim()) return configuredModel.trim();
+
+  const envModel = process.env.QMD_RERANK_MODEL?.trim();
+  if (envModel) return envModel;
+
+  if (hasOpenAIApiKey()) {
+    const openAIModel = process.env.QMD_OPENAI_RERANK_MODEL ?? DEFAULT_OPENAI_RERANK_MODEL_NAME;
+    return normalizeOpenAIModel(openAIModel, DEFAULT_OPENAI_RERANK_MODEL_NAME);
+  }
+
+  return DEFAULT_RERANK_MODEL;
+}
 
 export type PullResult = {
   model: string;
@@ -252,6 +320,17 @@ type OpenAIEmbedRef = {
 
 function parseOpenAIEmbedUri(model: string): OpenAIEmbedRef | null {
   if (!isOpenAIEmbeddingModel(model)) return null;
+  const parsed = model.slice("openai:".length).trim();
+  if (!parsed) return null;
+  return { model: parsed };
+}
+
+type OpenAIModelRef = {
+  model: string;
+};
+
+function parseOpenAIModelUri(model: string): OpenAIModelRef | null {
+  if (!isOpenAIModel(model)) return null;
   const parsed = model.slice("openai:".length).trim();
   if (!parsed) return null;
   return { model: parsed };
@@ -522,9 +601,9 @@ export class LlamaCpp implements LLM {
 
 
   constructor(config: LlamaCppConfig = {}) {
-    this.embedModelUri = config.embedModel || process.env.QMD_EMBED_MODEL || DEFAULT_EMBED_MODEL;
-    this.generateModelUri = config.generateModel || process.env.QMD_GENERATE_MODEL || DEFAULT_GENERATE_MODEL;
-    this.rerankModelUri = config.rerankModel || process.env.QMD_RERANK_MODEL || DEFAULT_RERANK_MODEL;
+    this.embedModelUri = resolveEmbedModelUri(config.embedModel);
+    this.generateModelUri = resolveGenerateModelUri(config.generateModel);
+    this.rerankModelUri = resolveRerankModelUri(config.rerankModel);
     this.modelCacheDir = config.modelCacheDir || MODEL_CACHE_DIR;
     this.expandContextSize = resolveExpandContextSize(config.expandContextSize);
     this.inactivityTimeoutMs = config.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
@@ -533,6 +612,12 @@ export class LlamaCpp implements LLM {
 
   get embedModelName(): string {
     return this.embedModelUri;
+  }
+  get generateModelName(): string {
+    return this.generateModelUri;
+  }
+  get rerankModelName(): string {
+    return this.rerankModelUri;
   }
 
   /**
@@ -976,11 +1061,20 @@ export class LlamaCpp implements LLM {
   }
 
   private getOpenAIConfig(): { apiKey: string; baseUrl: string } {
+    return this.getOpenAIConfigFor("embed");
+  }
+
+  private getOpenAIConfigFor(operation: "embed" | "generate" | "rerank"): { apiKey: string; baseUrl: string } {
     const apiKey = process.env.QMD_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      throw new Error("OpenAI embedding model configured but no API key found. Set QMD_OPENAI_API_KEY or OPENAI_API_KEY.");
+      throw new Error(`OpenAI ${operation} model configured but no API key found. Set QMD_OPENAI_API_KEY or OPENAI_API_KEY.`);
     }
-    const baseUrl = (process.env.QMD_OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+    const opBaseUrl = operation === "embed"
+      ? process.env.QMD_OPENAI_EMBED_BASE_URL
+      : operation === "generate"
+        ? process.env.QMD_OPENAI_GENERATE_BASE_URL
+        : process.env.QMD_OPENAI_RERANK_BASE_URL;
+    const baseUrl = (opBaseUrl ?? process.env.QMD_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
     return { apiKey, baseUrl };
   }
 
@@ -989,7 +1083,7 @@ export class LlamaCpp implements LLM {
     if (!ref) {
       throw new Error(`Invalid OpenAI embedding model URI: ${modelUri ?? this.embedModelUri}`);
     }
-    const { apiKey, baseUrl } = this.getOpenAIConfig();
+    const { apiKey, baseUrl } = this.getOpenAIConfigFor("embed");
     const response = await fetch(`${baseUrl}/embeddings`, {
       method: "POST",
       headers: {
@@ -1048,7 +1142,7 @@ export class LlamaCpp implements LLM {
     try {
       if (isOpenAIEmbeddingModel(options.model ?? this.embedModelUri)) {
         const [result] = await this.embedViaOpenAI([text], options.model);
-        return result;
+        return result ?? null;
       }
 
       const context = await this.ensureEmbedContext();
@@ -1151,6 +1245,34 @@ export class LlamaCpp implements LLM {
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 
+    if (isOpenAIModel(options.model ?? this.generateModelUri)) {
+      const ref = parseOpenAIModelUri(options.model ?? this.generateModelUri);
+      if (!ref) throw new Error(`Invalid OpenAI generate model URI: ${options.model ?? this.generateModelUri}`);
+      const { apiKey, baseUrl } = this.getOpenAIConfigFor("generate");
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: ref.model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: options.temperature ?? 0.7,
+          max_tokens: options.maxTokens ?? 150,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`OpenAI generation request failed (${response.status}): ${body.slice(0, 500)}`);
+      }
+      const payload = await response.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const text = payload.choices?.[0]?.message?.content ?? "";
+      return { text, model: options.model ?? this.generateModelUri, done: true };
+    }
+
     // Ensure model is loaded
     await this.ensureGenerateModel();
 
@@ -1193,7 +1315,7 @@ export class LlamaCpp implements LLM {
     if (modelUri.startsWith("hf:")) {
       return { name: modelUri, exists: true };
     }
-    if (isOpenAIEmbeddingModel(modelUri)) {
+    if (isOpenAIModel(modelUri)) {
       return { name: modelUri, exists: true };
     }
 
@@ -1214,11 +1336,35 @@ export class LlamaCpp implements LLM {
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 
-    const llama = await this.ensureLlama();
-    await this.ensureGenerateModel();
-
     const includeLexical = options.includeLexical ?? true;
     const context = options.context;
+    const intent = options.intent;
+
+    if (isOpenAIModel(this.generateModelUri)) {
+      const prompt = intent
+        ? `Expand this search query into lines in the exact format "type: text" where type is lex, vec, or hyde.\nQuery: ${query}\nIntent: ${intent}\n${context ? `Context: ${context}\n` : ""}Return 4-8 lines and include at least one vec and one hyde line.`
+        : `Expand this search query into lines in the exact format "type: text" where type is lex, vec, or hyde.\nQuery: ${query}\n${context ? `Context: ${context}\n` : ""}Return 4-8 lines and include at least one vec and one hyde line.`;
+      const generated = await this.generate(prompt, { maxTokens: 600, temperature: 0.7 });
+      const output = generated?.text ?? "";
+      const lines = output.trim().split("\n");
+      const parsed = lines.map((line) => {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx === -1) return null;
+        const type = line.slice(0, colonIdx).trim();
+        if (type !== "lex" && type !== "vec" && type !== "hyde") return null;
+        const text = line.slice(colonIdx + 1).trim();
+        if (!text) return null;
+        return { type: type as QueryType, text };
+      }).filter((q): q is Queryable => q !== null);
+      const filtered = includeLexical ? parsed : parsed.filter((q) => q.type !== "lex");
+      if (filtered.length > 0) return filtered;
+      const fallback: Queryable[] = [{ type: "vec", text: query }, { type: "hyde", text: `Information about ${query}` }];
+      if (includeLexical) fallback.unshift({ type: "lex", text: query });
+      return fallback;
+    }
+
+    const llama = await this.ensureLlama();
+    await this.ensureGenerateModel();
 
     const grammar = await llama.createGrammar({
       grammar: `
@@ -1229,7 +1375,6 @@ export class LlamaCpp implements LLM {
       `
     });
 
-    const intent = options.intent;
     const prompt = intent
       ? `/no_think Expand this search query: ${query}\nQuery intent: ${intent}`
       : `/no_think Expand this search query: ${query}`;
@@ -1312,6 +1457,60 @@ export class LlamaCpp implements LLM {
     if (this._ciMode) throw new Error("LLM operations are disabled in CI (set CI=true)");
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
+
+    if (isOpenAIModel(options.model ?? this.rerankModelUri)) {
+      const ref = parseOpenAIModelUri(options.model ?? this.rerankModelUri);
+      if (!ref) throw new Error(`Invalid OpenAI rerank model URI: ${options.model ?? this.rerankModelUri}`);
+      const { apiKey, baseUrl } = this.getOpenAIConfigFor("rerank");
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: ref.model,
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "Score each document for relevance to the query from 0 to 1. Return only JSON: {\"scores\":[number,...]} in document order.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                query,
+                documents: documents.map((d) => d.text),
+              }),
+            },
+          ],
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`OpenAI rerank request failed (${response.status}): ${body.slice(0, 500)}`);
+      }
+      const payload = await response.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = payload.choices?.[0]?.message?.content ?? "{}";
+      let scores: number[] = [];
+      try {
+        const parsed = JSON.parse(content) as { scores?: unknown };
+        if (Array.isArray(parsed.scores)) {
+          scores = parsed.scores.map((v) => (typeof v === "number" ? v : 0));
+        }
+      } catch {
+        scores = documents.map(() => 0);
+      }
+      const results = documents.map((doc, index) => ({
+        file: doc.file,
+        index,
+        score: scores[index] ?? 0,
+      })).sort((a, b) => b.score - a.score);
+      return { results, model: options.model ?? this.rerankModelUri };
+    }
 
     const contexts = await this.ensureRerankContexts();
     const model = await this.ensureRerankModel();

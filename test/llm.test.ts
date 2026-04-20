@@ -261,6 +261,18 @@ describe("LlamaCpp model resolution (config > env > default)", () => {
 });
 
 describe("LlamaCpp embedding truncation", () => {
+  test("blocks embed in CI mode when process.env.CI is truthy", async () => {
+    const prev = process.env.CI;
+    process.env.CI = "true";
+    try {
+      const llm = new LlamaCpp({});
+      await expect(llm.embed("hello")).rejects.toThrow("LLM operations are disabled in CI");
+    } finally {
+      if (prev === undefined) delete process.env.CI;
+      else process.env.CI = prev;
+    }
+  });
+
   test("truncates against the active embedding context limit, not the model train context", async () => {
     const llm = new LlamaCpp({}) as any;
     const getEmbeddingFor = vi.fn(async (text: string) => ({

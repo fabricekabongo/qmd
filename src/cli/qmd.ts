@@ -78,7 +78,7 @@ import {
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, setDefaultLlamaCpp, LlamaCpp, withLLMSession, pullModels, DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
+import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, setDefaultLlamaCpp, LlamaCpp, withLLMSession, pullModels, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
@@ -462,9 +462,10 @@ async function showStatus(): Promise<void> {
       return match ? `https://huggingface.co/${match[1]}` : uri;
     };
     console.log(`\n${c.bold}Models${c.reset}`);
-    console.log(`  Embedding:   ${hfLink(DEFAULT_EMBED_MODEL_URI)}`);
-    console.log(`  Reranking:   ${hfLink(DEFAULT_RERANK_MODEL_URI)}`);
-    console.log(`  Generation:  ${hfLink(DEFAULT_GENERATE_MODEL_URI)}`);
+    const llm = getDefaultLlamaCpp();
+    console.log(`  Embedding:   ${hfLink(llm.embedModelName)}`);
+    console.log(`  Reranking:   ${hfLink(llm.rerankModelName)}`);
+    console.log(`  Generation:  ${hfLink(llm.generateModelName)}`);
   }
 
   // Device / GPU info
@@ -1674,7 +1675,7 @@ function parseChunkStrategy(value: unknown): ChunkStrategy | undefined {
 }
 
 async function vectorIndex(
-  model: string = DEFAULT_EMBED_MODEL_URI,
+  model: string = getDefaultLlamaCpp().embedModelName,
   force: boolean = false,
   batchOptions?: { maxDocsPerBatch?: number; maxBatchBytes?: number; chunkStrategy?: ChunkStrategy },
 ): Promise<void> {
@@ -3107,7 +3108,7 @@ if (isMain) {
         const maxDocsPerBatch = parseEmbedBatchOption("maxDocsPerBatch", cli.values["max-docs-per-batch"]);
         const maxBatchMb = parseEmbedBatchOption("maxBatchBytes", cli.values["max-batch-mb"]);
         const embedChunkStrategy = parseChunkStrategy(cli.values["chunk-strategy"]);
-        await vectorIndex(DEFAULT_EMBED_MODEL_URI, !!cli.values.force, {
+        await vectorIndex(getDefaultLlamaCpp().embedModelName, !!cli.values.force, {
           maxDocsPerBatch,
           maxBatchBytes: maxBatchMb === undefined ? undefined : maxBatchMb * 1024 * 1024,
           chunkStrategy: embedChunkStrategy,
@@ -3120,11 +3121,12 @@ if (isMain) {
 
     case "pull": {
       const refresh = cli.values.refresh === undefined ? false : Boolean(cli.values.refresh);
+      const llm = getDefaultLlamaCpp();
       const models = [
-        DEFAULT_EMBED_MODEL_URI,
-        DEFAULT_GENERATE_MODEL_URI,
-        DEFAULT_RERANK_MODEL_URI,
-      ];
+        llm.embedModelName,
+        llm.generateModelName,
+        llm.rerankModelName,
+      ].filter(model => !model.startsWith("openai:"));
       console.log(`${c.bold}Pulling models${c.reset}`);
       const results = await pullModels(models, {
         refresh,

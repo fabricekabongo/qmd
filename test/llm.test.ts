@@ -174,7 +174,11 @@ describe("LlamaCpp model resolution (config > env > default)", () => {
 
   test("uses hardcoded default when no config or env is set", () => {
     const prev = process.env.QMD_EMBED_MODEL;
+    const prevQmdOpenAiKey = process.env.QMD_OPENAI_API_KEY;
+    const prevOpenAiKey = process.env.OPENAI_API_KEY;
     delete process.env.QMD_EMBED_MODEL;
+    delete process.env.QMD_OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
     try {
       const llm = new LlamaCpp({}) as any;
       expect(llm.embedModelUri).toBe(HARDCODED_EMBED);
@@ -183,6 +187,10 @@ describe("LlamaCpp model resolution (config > env > default)", () => {
     } finally {
       if (prev === undefined) delete process.env.QMD_EMBED_MODEL;
       else process.env.QMD_EMBED_MODEL = prev;
+      if (prevQmdOpenAiKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevQmdOpenAiKey;
+      if (prevOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevOpenAiKey;
     }
   });
 
@@ -207,6 +215,47 @@ describe("LlamaCpp model resolution (config > env > default)", () => {
     } finally {
       if (prev === undefined) delete process.env.QMD_EMBED_MODEL;
       else process.env.QMD_EMBED_MODEL = prev;
+    }
+  });
+
+  test("uses OpenAI embeddings by default when API key is present", () => {
+    const prevModel = process.env.QMD_EMBED_MODEL;
+    const prevQmdOpenAiKey = process.env.QMD_OPENAI_API_KEY;
+    const prevOpenAiEmbed = process.env.QMD_OPENAI_EMBED_MODEL;
+    delete process.env.QMD_EMBED_MODEL;
+    process.env.QMD_OPENAI_API_KEY = "test-key";
+    process.env.QMD_OPENAI_EMBED_MODEL = "text-embedding-3-large";
+    try {
+      const llm = new LlamaCpp({}) as any;
+      expect(llm.embedModelUri).toBe("openai:text-embedding-3-large");
+    } finally {
+      if (prevModel === undefined) delete process.env.QMD_EMBED_MODEL;
+      else process.env.QMD_EMBED_MODEL = prevModel;
+      if (prevQmdOpenAiKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevQmdOpenAiKey;
+      if (prevOpenAiEmbed === undefined) delete process.env.QMD_OPENAI_EMBED_MODEL;
+      else process.env.QMD_OPENAI_EMBED_MODEL = prevOpenAiEmbed;
+    }
+  });
+
+  test("uses OpenAI generate/rerank defaults when API key is present", () => {
+    const prevGenerate = process.env.QMD_GENERATE_MODEL;
+    const prevRerank = process.env.QMD_RERANK_MODEL;
+    const prevQmdOpenAiKey = process.env.QMD_OPENAI_API_KEY;
+    delete process.env.QMD_GENERATE_MODEL;
+    delete process.env.QMD_RERANK_MODEL;
+    process.env.QMD_OPENAI_API_KEY = "test-key";
+    try {
+      const llm = new LlamaCpp({}) as any;
+      expect(llm.generateModelUri).toBe("openai:gpt-5.4-mini");
+      expect(llm.rerankModelUri).toBe("openai:gpt-5.4-mini");
+    } finally {
+      if (prevGenerate === undefined) delete process.env.QMD_GENERATE_MODEL;
+      else process.env.QMD_GENERATE_MODEL = prevGenerate;
+      if (prevRerank === undefined) delete process.env.QMD_RERANK_MODEL;
+      else process.env.QMD_RERANK_MODEL = prevRerank;
+      if (prevQmdOpenAiKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevQmdOpenAiKey;
     }
   });
 });
@@ -256,13 +305,73 @@ describe("LlamaCpp embedding truncation", () => {
       });
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0]!;
-      expect(url).toBe("https://api.openai.com/v1/embeddings");
+      expect(url).toContain("/embeddings");
       expect((init as RequestInit).method).toBe("POST");
     } finally {
       fetchMock.mockRestore();
       if (prevKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
       else process.env.QMD_OPENAI_API_KEY = prevKey;
       await llm.dispose();
+    }
+  });
+
+  test("can generate through OpenAI-compatible API", async () => {
+    const llm = new LlamaCpp({ generateModel: "openai:gpt-5.4-mini" });
+    const prevKey = process.env.QMD_OPENAI_API_KEY;
+    process.env.QMD_OPENAI_API_KEY = "test-key";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch" as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "vec: hello world" } }],
+      }),
+    } as Response);
+
+    try {
+      const result = await llm.generate("hello");
+      expect(result?.text).toBe("vec: hello world");
+      expect(result?.model).toBe("openai:gpt-5.4-mini");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain("/chat/completions");
+      expect((init.method ?? "GET").toUpperCase()).toBe("POST");
+      const body = JSON.parse(String(init.body ?? "{}"));
+      expect(body.model).toBe("gpt-5.4-mini");
+    } finally {
+      fetchMock.mockRestore();
+      if (prevKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevKey;
+    }
+  });
+
+  test("can rerank through OpenAI-compatible API", async () => {
+    const llm = new LlamaCpp({ rerankModel: "openai:gpt-5.4-mini" });
+    const prevKey = process.env.QMD_OPENAI_API_KEY;
+    process.env.QMD_OPENAI_API_KEY = "test-key";
+
+    const fetchMock = vi.spyOn(globalThis, "fetch" as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "{\"scores\":[0.1,0.9]}" } }],
+      }),
+    } as Response);
+
+    try {
+      const result = await llm.rerank("hello", [
+        { file: "a.md", text: "aaa" },
+        { file: "b.md", text: "bbb" },
+      ]);
+      expect(result.model).toBe("openai:gpt-5.4-mini");
+      expect(result.results[0]?.file).toBe("b.md");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain("/chat/completions");
+    } finally {
+      fetchMock.mockRestore();
+      if (prevKey === undefined) delete process.env.QMD_OPENAI_API_KEY;
+      else process.env.QMD_OPENAI_API_KEY = prevKey;
     }
   });
 });

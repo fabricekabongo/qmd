@@ -66,6 +66,10 @@ function getLlm(store: Store): LlamaCpp {
   return store.llm ?? getDefaultLlamaCpp();
 }
 
+function getActiveEmbedModel(store: Store): string {
+  return getLlm(store).embedModelName || DEFAULT_EMBED_MODEL;
+}
+
 // =============================================================================
 // Smart Chunking - Break Point Detection
 // =============================================================================
@@ -1411,7 +1415,7 @@ export async function generateEmbeddings(
   options?: EmbedOptions
 ): Promise<EmbedResult> {
   const db = store.db;
-  const model = options?.model ?? DEFAULT_EMBED_MODEL;
+  const model = options?.model ?? getActiveEmbedModel(store);
   const now = new Date().toISOString();
   const { maxDocsPerBatch, maxBatchBytes } = resolveEmbedOptions(options);
   const encoder = new TextEncoder();
@@ -4100,7 +4104,7 @@ export async function hybridQuery(
       if (!embedding) continue;
 
       const vecResults = await store.searchVec(
-        vecQueries[i]!.text, DEFAULT_EMBED_MODEL, 20, collection,
+        vecQueries[i]!.text, getActiveEmbedModel(store), 20, collection,
         undefined, embedding
       );
       if (vecResults.length > 0) {
@@ -4333,7 +4337,7 @@ export async function vectorSearchQuery(
   const queryTexts = [query, ...vecExpanded.map(q => q.query)];
   const allResults = new Map<string, VectorSearchResult>();
   for (const q of queryTexts) {
-    const vecResults = await store.searchVec(q, DEFAULT_EMBED_MODEL, limit, collection);
+    const vecResults = await store.searchVec(q, getActiveEmbedModel(store), limit, collection);
     for (const r of vecResults) {
       const existing = allResults.get(r.filepath);
       if (!existing || r.score > existing.score) {
@@ -4483,7 +4487,7 @@ export async function structuredSearch(
 
         for (const coll of collectionList) {
           const vecResults = await store.searchVec(
-            vecSearches[i]!.query, DEFAULT_EMBED_MODEL, 20, coll,
+            vecSearches[i]!.query, getActiveEmbedModel(store), 20, coll,
             undefined, embedding
           );
           if (vecResults.length > 0) {
